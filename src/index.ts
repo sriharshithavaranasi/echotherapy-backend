@@ -1,8 +1,11 @@
+import dotenv from "dotenv";
+dotenv.config({ path: "./.env" });
+
+
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
-import dotenv from "dotenv";
 import { serve } from "inngest/express";
 import { errorHandler } from "./middleware/errorHandler";
 import { logger } from "./utils/logger";
@@ -15,7 +18,7 @@ import { inngest } from "./inngest/index";
 import { functions as inngestFunctions } from "./inngest/functions";
 
 // Load environment variables
-dotenv.config();
+//dotenv.config();
 
 // Create Express app
 const app = express();

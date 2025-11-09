@@ -7,16 +7,14 @@ import { inngest } from "../inngest/index";
 import { User } from "../models/User";
 import { InngestSessionResponse, InngestEvent } from "../types/inngest";
 import { Types } from "mongoose";
+import { triggerEmergencyCall } from "../utils/twilioCall"; // ✅ Added Twilio call import
 
 // Initialize Gemini API
-const genAI = new GoogleGenerativeAI(
-  process.env.GEMINI_API_KEY || "AIzaSyBCBz3wQu9Jjd_icCDZf-17CUO_O8IynwI"
-);
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY as string);
 
 // Create a new chat session
 export const createChatSession = async (req: Request, res: Response) => {
   try {
-    // Check if user is authenticated
     if (!req.user || !req.user.id) {
       return res
         .status(401)
@@ -30,9 +28,7 @@ export const createChatSession = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Generate a unique sessionId
     const sessionId = uuidv4();
-
     const session = new ChatSession({
       sessionId,
       userId,
@@ -65,7 +61,28 @@ export const sendMessage = async (req: Request, res: Response) => {
 
     logger.info("Processing message:", { sessionId, message });
 
-    // Find session by sessionId
+    // ✅ Step 1: Basic risk keyword check BEFORE any AI processing
+    const userMessage = message.toLowerCase();
+    const dangerKeywords = [
+      "suicide",
+      "kill myself",
+      "end it all",
+      "i want to die",
+      "hopeless",
+      "no reason to live",
+    ];
+    const isDanger = dangerKeywords.some((word) =>
+      userMessage.includes(word)
+    );
+
+    if (isDanger) {
+      logger.warn("⚠️ Detected potential suicidal ideation from user.");
+      await triggerEmergencyCall(
+        "Alert! The user may be experiencing suicidal thoughts. Please check on them immediately."
+      );
+    }
+
+    // Step 2: Continue normal AI conversation
     const session = await ChatSession.findOne({ sessionId });
     if (!session) {
       logger.warn("Session not found:", { sessionId });
@@ -77,7 +94,6 @@ export const sendMessage = async (req: Request, res: Response) => {
       return res.status(403).json({ message: "Unauthorized" });
     }
 
-    // Create Inngest event for message processing
     const event: InngestEvent = {
       name: "therapy/session.message",
       data: {
@@ -105,14 +121,11 @@ export const sendMessage = async (req: Request, res: Response) => {
     };
 
     logger.info("Sending message to Inngest:", { event });
-
-    // Send event to Inngest for logging and analytics
     await inngest.send(event);
 
-    // Process the message directly using Gemini
+    // Step 3: Analyze message using Gemini
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-    // Analyze the message
     const analysisPrompt = `Analyze this therapy message and provide insights. Return ONLY a valid JSON object with no markdown formatting or additional text.
     Message: ${message}
     Context: ${JSON.stringify({
@@ -138,7 +151,7 @@ export const sendMessage = async (req: Request, res: Response) => {
 
     logger.info("Message analysis:", analysis);
 
-    // Generate therapeutic response
+    // Step 4: Generate therapeutic response
     const responsePrompt = `${event.data.systemPrompt}
     
     Based on the following context, generate a therapeutic response:
@@ -159,7 +172,7 @@ export const sendMessage = async (req: Request, res: Response) => {
 
     logger.info("Generated response:", response);
 
-    // Add message to session history
+    // Step 5: Save conversation
     session.messages.push({
       role: "user",
       content: message,
@@ -179,11 +192,9 @@ export const sendMessage = async (req: Request, res: Response) => {
       },
     });
 
-    // Save the updated session
     await session.save();
     logger.info("Session updated successfully:", { sessionId });
 
-    // Return the response
     res.json({
       response,
       message: response,
@@ -254,7 +265,6 @@ export const getChatHistory = async (req: Request, res: Response) => {
     const { sessionId } = req.params;
     const userId = new Types.ObjectId(req.user.id);
 
-    // Find session by sessionId instead of _id
     const session = await ChatSession.findOne({ sessionId });
     if (!session) {
       return res.status(404).json({ message: "Session not found" });
@@ -270,3 +280,5 @@ export const getChatHistory = async (req: Request, res: Response) => {
     res.status(500).json({ message: "Error fetching chat history" });
   }
 };
+
+console.log("Loaded Gemini key prefix:", process.env.GEMINI_API_KEY?.slice(0, 5));
